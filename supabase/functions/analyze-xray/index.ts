@@ -38,10 +38,10 @@ serve(async (req) => {
 
   try {
     const { imageBase64, mode, previousScanBase64 } = await req.json();
-    const openAIKey = Deno.env.get('OPENAI_API_KEY');
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
 
-    if (!openAIKey) {
-      throw new Error('OPENAI_API_KEY is not configured');
+    if (!lovableApiKey) {
+      throw new Error('LOVABLE_API_KEY is not configured');
     }
 
     if (!imageBase64) {
@@ -50,7 +50,7 @@ serve(async (req) => {
 
     // Step 1: Validate if image is a chest X-ray
     console.log('Step 1: Validating image...');
-    const validationResult = await validateXrayImage(openAIKey, imageBase64);
+    const validationResult = await validateXrayImage(lovableApiKey, imageBase64);
     
     if (!validationResult.isValid) {
       return new Response(JSON.stringify({
@@ -67,7 +67,7 @@ serve(async (req) => {
 
     // Step 2: Perform main analysis
     console.log('Step 2: Performing analysis...');
-    const analysisResult = await performAnalysis(openAIKey, imageBase64, mode, previousScanBase64);
+    const analysisResult = await performAnalysis(lovableApiKey, imageBase64, mode, previousScanBase64);
 
     // Step 3: Apply confidence thresholding to reduce false positives
     const filteredResult = applyConfidenceThreshold(analysisResult);
@@ -90,24 +90,26 @@ serve(async (req) => {
 });
 
 async function validateXrayImage(apiKey: string, imageBase64: string): Promise<XrayValidationResult> {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'google/gemini-2.5-pro',
       messages: [{
         role: 'user',
         content: [
           {
             type: 'text',
-            text: `Is this image a chest X-ray? Respond with ONLY a JSON object in this format:
-{"isXray": true/false, "confidence": 0-100, "reason": "brief explanation"}
+            text: `Is this image a chest X-ray? Respond with ONLY a JSON object in this exact format:
+{"isXray": true, "confidence": 85, "reason": "explanation"}
 
 Look for: ribcage, lung fields, medical imaging characteristics, DICOM markers, grayscale medical imaging.
-Reject: text documents, random photos, non-medical images, other body X-rays (dental, limbs, etc).`
+Reject: text documents, random photos, non-medical images, other body X-rays (dental, limbs, etc).
+
+Return ONLY the JSON object, no other text.`
           },
           {
             type: 'image_url',
@@ -115,33 +117,47 @@ Reject: text documents, random photos, non-medical images, other body X-rays (de
           }
         ]
       }],
-      temperature: 0,
-      seed: 12345,
       max_tokens: 200
     })
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('OpenAI validation error:', errorText);
+    console.error('Lovable AI validation error:', errorText);
+    
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded. Please try again in a moment.');
+    }
+    if (response.status === 402) {
+      throw new Error('AI credits depleted. Please add credits to your workspace.');
+    }
     throw new Error('Failed to validate image');
   }
 
   const data = await response.json();
   const content = data.choices[0].message.content;
   
+  console.log('Validation response:', content);
+  
   try {
-    const parsed = JSON.parse(content);
-    return {
-      isValid: parsed.isXray && parsed.confidence >= 75,
-      confidence: parsed.confidence,
-      reason: parsed.reason
-    };
-  } catch {
-    // Fallback parsing
-    const isXray = content.toLowerCase().includes('yes') || content.toLowerCase().includes('true');
-    return { isValid: isXray, confidence: isXray ? 80 : 20 };
+    // Try to extract JSON from the response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        isValid: parsed.isXray && parsed.confidence >= 70,
+        confidence: parsed.confidence,
+        reason: parsed.reason
+      };
+    }
+  } catch (e) {
+    console.log('JSON parse failed, using fallback');
   }
+  
+  // Fallback parsing
+  const isXray = content.toLowerCase().includes('yes') || 
+                 (content.toLowerCase().includes('true') && content.toLowerCase().includes('xray'));
+  return { isValid: isXray, confidence: isXray ? 75 : 20 };
 }
 
 async function performAnalysis(
@@ -162,27 +178,36 @@ STRICT CRITERIA for abnormality detection:
 
 IMPORTANT: Provide realistic, medically accurate assessments. Do not over-diagnose.`;
 
-  let userPrompt = `Analyze this chest X-ray and provide a comprehensive analysis in JSON format:
+  let userPrompt = `Analyze this chest X-ray and provide a comprehensive analysis. Return ONLY a valid JSON object with this exact structure:
 
 {
-  "classification": "Normal" or "Abnormal" (be conservative - default to Normal unless clear evidence),
-  "risk_score": 0-100 (below 30 = Normal, 30-60 = Moderate, 60+ = High. Use FULL range, most normal X-rays should be 5-25),
-  "confidence": 0-100,
-  "findings": ["finding 1", "finding 2"] (only list ACTUAL visible abnormalities, empty array if normal),
-  "heatmap_regions": [{"x_percent": 50, "y_percent": 30, "intensity": 0.8, "size": 40}] (coordinates of areas of concern, empty if normal),
-  "nodule_location": "description or 'None detected'",
-  "nodule_dimensions": "dimensions or 'N/A'",
-  "additional_observations": ["observation 1"],
-  "detailed_report": "Full radiologist-style report text",
+  "classification": "Normal",
+  "risk_score": 15,
+  "confidence": 85,
+  "findings": [],
+  "heatmap_regions": [],
+  "nodule_location": "None detected",
+  "nodule_dimensions": "N/A",
+  "additional_observations": [],
+  "detailed_report": "Full radiologist-style report text here",
   "recommendations": ["recommendation 1"],
-  "lung_age": {"age": estimated_lung_age, "notes": "explanation of estimation"},
-  "symmetry_analysis": {"score": 0-100, "asymmetric_regions": [], "notes": "comparison of left vs right lung"}
-}`;
+  "lung_age": {"age": 45, "notes": "explanation"},
+  "symmetry_analysis": {"score": 95, "asymmetric_regions": [], "notes": "comparison notes"}
+}
+
+Guidelines:
+- classification: "Normal" or "Abnormal" (be conservative - default to Normal unless clear evidence)
+- risk_score: 0-100 (below 30 = Normal, 30-60 = Moderate, 60+ = High. Most normal X-rays should be 5-25)
+- confidence: 0-100
+- findings: only list ACTUAL visible abnormalities, empty array if normal
+- heatmap_regions: coordinates of areas of concern with x_percent, y_percent, intensity (0-1), size (pixels), empty if normal
+
+Return ONLY the JSON object, no other text.`;
 
   if (mode === 'multi-disease') {
     userPrompt += `
 
-ALSO analyze for multiple conditions and add:
+ALSO analyze for multiple conditions and add this field to the JSON:
 "multi_disease_results": [
   {"disease": "Lung Cancer", "present": false, "confidence": 95, "findings": []},
   {"disease": "Pneumonia", "present": false, "confidence": 90, "findings": []},
@@ -196,11 +221,11 @@ ALSO analyze for multiple conditions and add:
   if (mode === 'comparison' && previousScanBase64) {
     userPrompt += `
 
-COMPARISON MODE: Also compare with the previous scan provided. Add:
+COMPARISON MODE: Also compare with the previous scan provided. Add this field to the JSON:
 "comparison_results": {
   "changes": ["description of changes"],
-  "progression_rate": percentage,
-  "overall_trend": "improving/stable/worsening"
+  "progression_rate": 0,
+  "overall_trend": "stable"
 }`;
   }
 
@@ -222,33 +247,45 @@ COMPARISON MODE: Also compare with the previous scan provided. Add:
     });
   }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'google/gemini-2.5-pro',
       messages,
-      temperature: 0,
-      seed: 12345,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' }
+      max_tokens: 2500
     })
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('OpenAI analysis error:', errorText);
+    console.error('Lovable AI analysis error:', errorText);
+    
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded. Please try again in a moment.');
+    }
+    if (response.status === 402) {
+      throw new Error('AI credits depleted. Please add credits to your workspace.');
+    }
     throw new Error('Failed to analyze X-ray');
   }
 
   const data = await response.json();
   const content = data.choices[0].message.content;
   
+  console.log('Analysis response received, length:', content.length);
+  
   try {
-    const parsed = JSON.parse(content);
+    // Try to extract JSON from the response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON found in response');
+    }
+    
+    const parsed = JSON.parse(jsonMatch[0]);
     
     // Map API response to our interface
     const riskScore = parsed.risk_score || 15;
@@ -276,7 +313,7 @@ COMPARISON MODE: Also compare with the previous scan provided. Add:
       multiDiseaseResults: parsed.multi_disease_results
     };
   } catch (e) {
-    console.error('Failed to parse analysis response:', e);
+    console.error('Failed to parse analysis response:', e, 'Content:', content.substring(0, 500));
     throw new Error('Failed to parse analysis results');
   }
 }
