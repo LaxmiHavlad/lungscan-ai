@@ -170,44 +170,18 @@ STRICT CRITERIA for abnormality detection:
 
 IMPORTANT: Provide realistic, medically accurate assessments. Do not over-diagnose.`;
 
-  let userPrompt = `Analyze this chest X-ray and provide a comprehensive analysis. Return ONLY a valid JSON object with this exact structure:
-
-{
-  "classification": "Normal",
-  "risk_score": 15,
-  "confidence": 85,
-  "findings": [],
-  "heatmap_regions": [],
-  "nodule_location": "None detected",
-  "nodule_dimensions": "N/A",
-  "additional_observations": [],
-  "detailed_report": "Full radiologist-style report text here",
-  "recommendations": ["recommendation 1"],
-  "lung_age": {"age": 45, "notes": "explanation"},
-  "symmetry_analysis": {"score": 95, "asymmetric_regions": [], "notes": "comparison notes"}
-}
+  let userPrompt = `Analyze this chest X-ray image comprehensively. Use the submit_xray_analysis function to provide your results.
 
 Guidelines:
-- classification: "Normal" or "Abnormal" (be conservative - default to Normal unless clear evidence)
-- risk_score: 0-100 (below 30 = Normal, 30-60 = Moderate, 60+ = High. Most normal X-rays should be 5-25)
-- confidence: 0-100
-- findings: only list ACTUAL visible abnormalities, empty array if normal
-- heatmap_regions: coordinates of areas of concern with x_percent, y_percent, intensity (0-1), size (pixels), empty if normal
-
-Return ONLY the JSON object, no other text.`;
+- Be conservative - default to Normal unless there is clear evidence of pathology
+- risk_score: 0-100 (below 30 = Low risk, 30-60 = Moderate, 60+ = High risk)
+- Only list actual visible abnormalities in findings
+- Provide heatmap_regions for areas of concern (x_percent, y_percent as 0-100, intensity as 0-1)`;
 
   if (mode === 'multi-disease') {
     userPrompt += `
 
-ALSO analyze for multiple conditions and add this field to the JSON:
-"multi_disease_results": [
-  {"disease": "Lung Cancer", "present": false, "confidence": 95, "findings": []},
-  {"disease": "Pneumonia", "present": false, "confidence": 90, "findings": []},
-  {"disease": "Tuberculosis", "present": false, "confidence": 92, "findings": []},
-  {"disease": "COPD", "present": false, "confidence": 88, "findings": []},
-  {"disease": "Pleural Effusion", "present": false, "confidence": 94, "findings": []},
-  {"disease": "Atelectasis", "present": false, "confidence": 91, "findings": []}
-]`;
+Also analyze for these conditions in multi_disease_results: Lung Cancer, Pneumonia, Tuberculosis, COPD, Pleural Effusion, Atelectasis.`;
   }
 
   if (mode === 'comparison' && previousScanBase64) {
@@ -239,6 +213,66 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
     });
   }
 
+  // Define the tool for structured output
+  const tools = [{
+    type: "function",
+    function: {
+      name: "submit_xray_analysis",
+      description: "Submit the X-ray analysis results",
+      parameters: {
+        type: "object",
+        properties: {
+          classification: { type: "string", enum: ["Normal", "Abnormal", "Inconclusive"] },
+          risk_score: { type: "number", description: "Risk score 0-100" },
+          confidence: { type: "number", description: "Confidence 0-100" },
+          findings: { type: "array", items: { type: "string" }, description: "List of findings" },
+          heatmap_regions: { 
+            type: "array", 
+            items: { 
+              type: "object",
+              properties: {
+                x_percent: { type: "number" },
+                y_percent: { type: "number" },
+                intensity: { type: "number" },
+                size: { type: "number" }
+              }
+            }
+          },
+          nodule_location: { type: "string" },
+          nodule_dimensions: { type: "string" },
+          additional_observations: { type: "array", items: { type: "string" } },
+          detailed_report: { type: "string" },
+          recommendations: { type: "array", items: { type: "string" } },
+          lung_age: { 
+            type: "object",
+            properties: { age: { type: "number" }, notes: { type: "string" } }
+          },
+          symmetry_analysis: {
+            type: "object",
+            properties: { 
+              score: { type: "number" }, 
+              asymmetric_regions: { type: "array", items: { type: "string" } },
+              notes: { type: "string" }
+            }
+          },
+          multi_disease_results: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                disease: { type: "string" },
+                present: { type: "boolean" },
+                confidence: { type: "number" },
+                findings: { type: "array", items: { type: "string" } }
+              }
+            }
+          }
+        },
+        required: ["classification", "risk_score", "confidence", "findings", "recommendations"]
+      }
+    }
+  }];
+
   const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -248,7 +282,8 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
     body: JSON.stringify({
       model: 'google/gemini-2.5-pro',
       messages,
-      max_tokens: 4000
+      tools,
+      tool_choice: { type: "function", function: { name: "submit_xray_analysis" } }
     })
   });
 
@@ -266,24 +301,18 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
   }
 
   const data = await response.json();
-  const content = data.choices[0].message.content;
-  
-  console.log('Analysis response received, length:', content.length);
+  console.log('Analysis response received');
   
   try {
-    // Strip markdown code blocks if present
-    let cleanContent = content
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
-      .trim();
-    
-    // Try to extract JSON from the response
-    const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error('No JSON found in response');
+    // Extract the tool call arguments
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall || !toolCall.function?.arguments) {
+      console.error('No tool call in response:', JSON.stringify(data).substring(0, 500));
+      throw new Error('No structured response from AI');
     }
     
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(toolCall.function.arguments);
+    console.log('Parsed tool call arguments successfully');
     
     // Map API response to our interface
     const riskScore = parsed.risk_score || 15;
@@ -311,7 +340,7 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
       multiDiseaseResults: parsed.multi_disease_results
     };
   } catch (e) {
-    console.error('Failed to parse analysis response:', e, 'Content:', content.substring(0, 500));
+    console.error('Failed to parse tool call response:', e);
     throw new Error('Failed to parse analysis results');
   }
 }
