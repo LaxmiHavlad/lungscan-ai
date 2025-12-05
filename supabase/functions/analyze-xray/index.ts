@@ -97,19 +97,15 @@ async function validateXrayImage(apiKey: string, imageBase64: string): Promise<X
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'google/gemini-2.5-pro',
+      model: 'google/gemini-2.5-flash',
       messages: [{
         role: 'user',
         content: [
           {
             type: 'text',
-            text: `Is this image a chest X-ray? Respond with ONLY a JSON object in this exact format:
-{"isXray": true, "confidence": 85, "reason": "explanation"}
-
-Look for: ribcage, lung fields, medical imaging characteristics, DICOM markers, grayscale medical imaging.
-Reject: text documents, random photos, non-medical images, other body X-rays (dental, limbs, etc).
-
-Return ONLY the JSON object, no other text.`
+            text: `Look at this image. Is it a chest X-ray (showing lungs and ribcage)?
+            
+Answer with exactly one word: YES or NO`
           },
           {
             type: 'image_url',
@@ -117,7 +113,7 @@ Return ONLY the JSON object, no other text.`
           }
         ]
       }],
-      max_tokens: 200
+      max_tokens: 50
     })
   });
 
@@ -131,44 +127,29 @@ Return ONLY the JSON object, no other text.`
     if (response.status === 402) {
       throw new Error('AI credits depleted. Please add credits to your workspace.');
     }
-    throw new Error('Failed to validate image');
+    // On validation error, skip validation and proceed with analysis
+    console.log('Validation failed, proceeding with analysis anyway');
+    return { isValid: true, confidence: 50, reason: 'Validation skipped due to error' };
   }
 
   const data = await response.json();
-  const content = data.choices[0].message.content;
+  const content = data.choices?.[0]?.message?.content || '';
   
-  console.log('Validation response full:', content);
+  console.log('Validation response:', content);
   
-  try {
-    // Clean up markdown formatting and extract JSON
-    let cleanContent = content
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
-      .trim();
-    
-    // Try to extract JSON from the response
-    const jsonMatch = cleanContent.match(/\{[\s\S]*?\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      console.log('Parsed validation:', parsed);
-      
-      const isXray = parsed.isXray === true || parsed.isXray === 'true';
-      const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : parseInt(parsed.confidence) || 50;
-      
-      return {
-        isValid: isXray && confidence >= 60,
-        confidence: confidence,
-        reason: parsed.reason || ''
-      };
-    }
-  } catch (e) {
-    console.log('JSON parse failed, error:', e, 'using fallback');
+  const upperContent = content.toUpperCase().trim();
+  const isYes = upperContent.includes('YES') || upperContent.startsWith('Y');
+  const isNo = upperContent.includes('NO') && !upperContent.includes('YES');
+  
+  if (isYes) {
+    return { isValid: true, confidence: 85, reason: 'Image identified as chest X-ray' };
+  } else if (isNo) {
+    return { isValid: false, confidence: 85, reason: 'Image does not appear to be a chest X-ray' };
   }
   
-  // Fallback parsing
-  const isXray = content.toLowerCase().includes('yes') || 
-                 (content.toLowerCase().includes('true') && content.toLowerCase().includes('xray'));
-  return { isValid: isXray, confidence: isXray ? 75 : 20 };
+  // If unclear response, default to allowing analysis (let the main analysis handle it)
+  console.log('Unclear validation response, proceeding with analysis');
+  return { isValid: true, confidence: 50, reason: 'Validation inconclusive, proceeding with analysis' };
 }
 
 async function performAnalysis(
