@@ -137,21 +137,32 @@ Return ONLY the JSON object, no other text.`
   const data = await response.json();
   const content = data.choices[0].message.content;
   
-  console.log('Validation response:', content);
+  console.log('Validation response full:', content);
   
   try {
+    // Clean up markdown formatting and extract JSON
+    let cleanContent = content
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/gi, '')
+      .trim();
+    
     // Try to extract JSON from the response
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const jsonMatch = cleanContent.match(/\{[\s\S]*?\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
+      console.log('Parsed validation:', parsed);
+      
+      const isXray = parsed.isXray === true || parsed.isXray === 'true';
+      const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : parseInt(parsed.confidence) || 50;
+      
       return {
-        isValid: parsed.isXray && parsed.confidence >= 70,
-        confidence: parsed.confidence,
-        reason: parsed.reason
+        isValid: isXray && confidence >= 60,
+        confidence: confidence,
+        reason: parsed.reason || ''
       };
     }
   } catch (e) {
-    console.log('JSON parse failed, using fallback');
+    console.log('JSON parse failed, error:', e, 'using fallback');
   }
   
   // Fallback parsing
