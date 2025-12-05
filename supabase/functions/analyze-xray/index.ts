@@ -248,7 +248,7 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
     body: JSON.stringify({
       model: 'google/gemini-2.5-pro',
       messages,
-      max_tokens: 2500
+      max_tokens: 4000
     })
   });
 
@@ -271,8 +271,14 @@ COMPARISON MODE: Also compare with the previous scan provided. Add this field to
   console.log('Analysis response received, length:', content.length);
   
   try {
+    // Strip markdown code blocks if present
+    let cleanContent = content
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/gi, '')
+      .trim();
+    
     // Try to extract JSON from the response
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('No JSON found in response');
     }
