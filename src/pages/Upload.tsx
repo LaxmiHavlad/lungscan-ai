@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,26 +10,41 @@ import {
   X,
   CheckCircle2,
   Loader2,
-  Activity
+  Activity,
+  Camera,
+  Sparkles,
+  Zap,
+  AlertCircle
 } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
-import { performMockAnalysis, generateHeatmapOverlay } from '@/utils/mockAI';
+import { analyzeXray, generateHeatmapFromRegions, preprocessImage, validateImageFile } from '@/utils/xrayAnalysis';
+import { Switch } from '@/components/ui/switch';
+import { useToast } from '@/hooks/use-toast';
 
 const Upload: React.FC = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { 
     hasAcceptedTerms, 
     setUploadedImage, 
     setUploadedFile,
     setAnalysisResult,
     setHeatmapImage,
-    setIsAnalyzing
+    setIsAnalyzing,
+    analysisMode,
+    setAnalysisMode,
+    setValidationError,
+    validationError,
+    addToHealthPassport
   } = useAppContext();
 
   const [preview, setPreview] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [isAcknowledged, setIsAcknowledged] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<string>('');
+  const [enhanceImage, setEnhanceImage] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Redirect if terms not accepted
   React.useEffect(() => {
@@ -38,21 +53,38 @@ const Upload: React.FC = () => {
     }
   }, [hasAcceptedTerms, navigate]);
 
+  const processFile = async (file: File) => {
+    // Validate file first
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      setValidationError(validation.error || 'Invalid file');
+      toast({
+        title: "Invalid File",
+        description: validation.error,
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setValidationError(null);
+    setFileName(file.name);
+    setUploadedFile(file);
+    
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      setPreview(result);
+      setUploadedImage(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (file) {
-      setFileName(file.name);
-      setUploadedFile(file);
-      
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        setPreview(result);
-        setUploadedImage(result);
-      };
-      reader.readAsDataURL(file);
+      processFile(file);
     }
-  }, [setUploadedFile, setUploadedImage]);
+  }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -64,11 +96,23 @@ const Upload: React.FC = () => {
     maxFiles: 1,
   });
 
+  const handleCameraCapture = () => {
+    cameraInputRef.current?.click();
+  };
+
+  const handleCameraChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processFile(file);
+    }
+  };
+
   const clearFile = () => {
     setPreview(null);
     setFileName('');
     setUploadedFile(null);
     setUploadedImage(null);
+    setValidationError(null);
   };
 
   const handleAnalyze = async () => {
@@ -76,34 +120,86 @@ const Upload: React.FC = () => {
 
     setIsLoading(true);
     setIsAnalyzing(true);
+    setValidationError(null);
 
     try {
-      // Perform mock AI analysis
-      const result = await performMockAnalysis();
+      // Step 1: Preprocess image
+      setLoadingStep('Preprocessing image...');
+      let imageToAnalyze = preview;
+      
+      // Optional enhancement
+      if (enhanceImage) {
+        setLoadingStep('Enhancing image quality...');
+        // The preprocessing includes contrast enhancement
+        const file = await fetch(preview).then(r => r.blob()).then(b => new File([b], 'xray.jpg', { type: 'image/jpeg' }));
+        imageToAnalyze = await preprocessImage(file);
+      }
+
+      // Step 2: Validate and analyze
+      setLoadingStep('Validating X-ray image...');
+      await new Promise(r => setTimeout(r, 500)); // Brief pause for UX
+      
+      setLoadingStep('Analyzing with AI...');
+      const result = await analyzeXray(imageToAnalyze, {
+        mode: analysisMode
+      });
+      
       setAnalysisResult(result);
 
-      // Generate heatmap
+      // Step 3: Generate heatmap
+      setLoadingStep('Generating heatmap visualization...');
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const heatmap = generateHeatmapOverlay(img, canvas);
+        const heatmap = generateHeatmapFromRegions(img, result.heatmapRegions);
         setHeatmapImage(heatmap);
+        
+        // Add to health passport
+        addToHealthPassport({
+          date: result.analysisTimestamp,
+          riskScore: result.riskScore,
+          classification: result.classification,
+          findings: result.findings,
+          imagePreview: preview.slice(0, 500) // Store small preview
+        });
+        
+        setIsLoading(false);
+        setIsAnalyzing(false);
+        navigate('/results');
+      };
+      img.onerror = () => {
+        // Fallback - use original image
+        setHeatmapImage(preview);
         setIsLoading(false);
         setIsAnalyzing(false);
         navigate('/results');
       };
       img.src = preview;
+
     } catch (error) {
       console.error('Analysis failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Analysis failed';
+      
+      // Check if it's a validation error
+      if (errorMessage.includes('not appear to be a chest X-ray') || errorMessage.includes('invalid_image')) {
+        setValidationError('⚠️ Invalid Image Detected\n\nThis does not appear to be a chest X-ray. Please upload a clear chest X-ray image.\n\nAccepted: Frontal chest X-ray (PA or AP view)\nRejected: Text documents, photos, non-medical images');
+      } else {
+        toast({
+          title: "Analysis Failed",
+          description: errorMessage,
+          variant: "destructive"
+        });
+      }
+      
       setIsLoading(false);
       setIsAnalyzing(false);
     }
   };
 
   const guidelines = [
-    { label: 'Resolution', value: 'High-resolution images recommended' },
+    { label: 'Resolution', value: 'High-resolution images recommended (1000+ pixels)' },
     { label: 'Anonymization', value: 'Ensure patient data is anonymized before upload' },
-    { label: 'View', value: 'Clear, unobstructed frontal (AP/PA) views' },
+    { label: 'View', value: 'Clear, unobstructed frontal (AP/PA) chest X-ray views' },
+    { label: 'Format', value: 'JPEG, PNG, or DICOM files accepted' },
   ];
 
   return (
@@ -164,6 +260,31 @@ const Upload: React.FC = () => {
           </div>
         </div>
 
+        {/* Validation Error Alert */}
+        <AnimatePresence>
+          {validationError && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-6 bg-danger-pink border border-danger-red/30 rounded-xl p-4"
+            >
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-6 h-6 text-danger-red flex-shrink-0 mt-0.5" />
+                <div>
+                  <pre className="text-sm whitespace-pre-wrap font-sans text-foreground">{validationError}</pre>
+                  <button 
+                    onClick={clearFile}
+                    className="mt-3 text-sm text-primary hover:underline"
+                  >
+                    Upload a different image
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Upload Area */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -171,6 +292,16 @@ const Upload: React.FC = () => {
           className="bg-card rounded-2xl p-8 shadow-sm border border-border mb-6"
         >
           <h1 className="text-2xl font-bold mb-6">Upload Chest X-ray</h1>
+
+          {/* Hidden camera input */}
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleCameraChange}
+            className="hidden"
+          />
 
           <AnimatePresence mode="wait">
             {!preview ? (
@@ -201,9 +332,22 @@ const Upload: React.FC = () => {
                   <p className="text-muted-foreground text-sm mb-4">
                     Supported formats: DICOM, PNG, JPG
                   </p>
-                  <button type="button" className="btn-primary px-6 py-2 rounded-lg text-sm">
-                    Browse Files
-                  </button>
+                  <div className="flex items-center justify-center gap-3">
+                    <button type="button" className="btn-primary px-6 py-2 rounded-lg text-sm">
+                      Browse Files
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCameraCapture();
+                      }}
+                      className="btn-secondary px-6 py-2 rounded-lg text-sm flex items-center gap-2"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Capture Photo
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             ) : (
@@ -238,6 +382,51 @@ const Upload: React.FC = () => {
               </motion.div>
             )}
           </AnimatePresence>
+        </motion.div>
+
+        {/* Analysis Options */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6"
+        >
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-primary" />
+            Analysis Options
+          </h2>
+          
+          <div className="space-y-4">
+            {/* Image Enhancement Toggle */}
+            <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+              <div className="flex items-center gap-3">
+                <Zap className="w-5 h-5 text-warning" />
+                <div>
+                  <p className="font-medium">Enhance Image Quality</p>
+                  <p className="text-sm text-muted-foreground">Improve contrast and sharpness before analysis</p>
+                </div>
+              </div>
+              <Switch 
+                checked={enhanceImage} 
+                onCheckedChange={setEnhanceImage}
+              />
+            </div>
+
+            {/* Multi-Disease Mode Toggle */}
+            <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+              <div className="flex items-center gap-3">
+                <Activity className="w-5 h-5 text-primary" />
+                <div>
+                  <p className="font-medium">Advanced Multi-Disease Detection</p>
+                  <p className="text-sm text-muted-foreground">Check for pneumonia, TB, COPD, and more</p>
+                </div>
+              </div>
+              <Switch 
+                checked={analysisMode === 'multi-disease'} 
+                onCheckedChange={(checked) => setAnalysisMode(checked ? 'multi-disease' : 'standard')}
+              />
+            </div>
+          </div>
         </motion.div>
 
         {/* Image Guidelines */}
@@ -291,11 +480,11 @@ const Upload: React.FC = () => {
 
           <motion.button
             onClick={handleAnalyze}
-            disabled={!preview || !isAcknowledged || isLoading}
-            whileHover={preview && isAcknowledged && !isLoading ? { scale: 1.02 } : {}}
-            whileTap={preview && isAcknowledged && !isLoading ? { scale: 0.98 } : {}}
+            disabled={!preview || !isAcknowledged || isLoading || !!validationError}
+            whileHover={preview && isAcknowledged && !isLoading && !validationError ? { scale: 1.02 } : {}}
+            whileTap={preview && isAcknowledged && !isLoading && !validationError ? { scale: 0.98 } : {}}
             className={`w-full py-4 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-all ${
-              preview && isAcknowledged && !isLoading
+              preview && isAcknowledged && !isLoading && !validationError
                 ? 'btn-primary cursor-pointer'
                 : 'bg-muted text-muted-foreground cursor-not-allowed'
             }`}
@@ -303,7 +492,7 @@ const Upload: React.FC = () => {
             {isLoading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Analyzing X-ray...
+                {loadingStep || 'Analyzing X-ray...'}
               </>
             ) : (
               'Analyze'
