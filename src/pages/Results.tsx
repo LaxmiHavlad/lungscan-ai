@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
@@ -14,6 +14,13 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '@/context/AppContext';
 import { generatePDFReport } from '@/utils/pdfGenerator';
+import VoiceReport from '@/components/VoiceReport';
+import RiskSimulator from '@/components/RiskSimulator';
+import EmergencyAlert from '@/components/EmergencyAlert';
+import LungAgeCard from '@/components/LungAgeCard';
+import SymmetryAnalysis from '@/components/SymmetryAnalysis';
+import MultiDiseaseResults from '@/components/MultiDiseaseResults';
+import RadiologistReport from '@/components/RadiologistReport';
 
 const Results: React.FC = () => {
   const navigate = useNavigate();
@@ -30,15 +37,22 @@ const Results: React.FC = () => {
 
   const [isAcknowledged, setIsAcknowledged] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [showEmergencyAlert, setShowEmergencyAlert] = useState(false);
 
-  // Redirect if no results or terms not accepted
-  React.useEffect(() => {
+  useEffect(() => {
     if (!hasAcceptedTerms) {
       navigate('/disclaimer');
     } else if (!analysisResult || !uploadedImage) {
       navigate('/upload');
     }
   }, [hasAcceptedTerms, analysisResult, uploadedImage, navigate]);
+
+  // Show emergency alert for high risk
+  useEffect(() => {
+    if (analysisResult && analysisResult.riskScore >= 85 && analysisResult.confidence >= 80) {
+      setShowEmergencyAlert(true);
+    }
+  }, [analysisResult]);
 
   if (!analysisResult || !uploadedImage) {
     return null;
@@ -54,7 +68,6 @@ const Results: React.FC = () => {
 
   const handleDownloadReport = async () => {
     if (!isAcknowledged) return;
-    
     setIsDownloading(true);
     try {
       await generatePDFReport(analysisResult, uploadedImage, heatmapImage || uploadedImage);
@@ -80,14 +93,18 @@ const Results: React.FC = () => {
     }
   };
 
-  const getAttentionPosition = () => {
-    if (analysisResult.riskScore < 50) return '15%';
-    if (analysisResult.riskScore < 70) return '50%';
-    return '85%';
-  };
-
   return (
     <div className="min-h-screen bg-muted">
+      {/* Emergency Alert Modal */}
+      {showEmergencyAlert && (
+        <EmergencyAlert
+          riskScore={analysisResult.riskScore}
+          confidence={analysisResult.confidence}
+          patientId={analysisResult.patientId}
+          onClose={() => setShowEmergencyAlert(false)}
+        />
+      )}
+
       {/* Warning Banner */}
       <div className="bg-danger-pink border-b border-danger-red/30">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-center gap-2 text-sm">
@@ -117,11 +134,7 @@ const Results: React.FC = () => {
         </div>
 
         {/* Title & Patient Info */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
           <h1 className="text-3xl font-bold mb-4">Screening Results</h1>
           <div className="flex flex-wrap gap-6 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
@@ -130,86 +143,79 @@ const Results: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              <span>Analysis: <strong className="text-foreground">
-                {new Date(analysisResult.analysisTimestamp).toLocaleString()}
-              </strong></span>
+              <span>Analysis: <strong className="text-foreground">{new Date(analysisResult.analysisTimestamp).toLocaleString()}</strong></span>
             </div>
           </div>
         </motion.div>
 
+        {/* Voice Report */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="mb-6">
+          <VoiceReport analysisResult={analysisResult} />
+        </motion.div>
+
         {/* Image Panels */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8"
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <div className="bg-card rounded-2xl p-4 shadow-sm border border-border">
             <h3 className="text-sm font-medium text-muted-foreground mb-3">Original X-ray</h3>
             <div className="bg-muted rounded-xl overflow-hidden aspect-square flex items-center justify-center">
-              <img 
-                src={uploadedImage} 
-                alt="Original X-ray" 
-                className="max-w-full max-h-full object-contain"
-              />
+              <img src={uploadedImage} alt="Original X-ray" className="max-w-full max-h-full object-contain" />
             </div>
           </div>
           <div className="bg-card rounded-2xl p-4 shadow-sm border border-border">
-            <h3 className="text-sm font-medium text-muted-foreground mb-3">Grad-CAM Heatmap</h3>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3">AI Heatmap Analysis</h3>
             <div className="bg-muted rounded-xl overflow-hidden aspect-square flex items-center justify-center">
-              <img 
-                src={heatmapImage || uploadedImage} 
-                alt="Heatmap visualization" 
-                className="max-w-full max-h-full object-contain"
-              />
+              <img src={heatmapImage || uploadedImage} alt="Heatmap visualization" className="max-w-full max-h-full object-contain" />
             </div>
           </div>
         </motion.div>
 
         {/* AI Analysis Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className={`${getRiskBgColor()} rounded-2xl p-6 mb-6 border border-border`}
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className={`${getRiskBgColor()} rounded-2xl p-6 mb-6 border border-border`}>
           <div className="flex items-start justify-between flex-wrap gap-4">
             <div>
               <p className="text-sm text-muted-foreground mb-1">Risk Score</p>
-              <p className={`text-5xl font-bold ${getRiskColor()}`}>
-                {analysisResult.riskScore}%
-              </p>
+              <p className={`text-5xl font-bold ${getRiskColor()}`}>{analysisResult.riskScore}%</p>
+              <p className="text-sm text-muted-foreground mt-1">Confidence: {analysisResult.confidence}%</p>
             </div>
             <div className="text-right">
-              <p className="text-sm text-muted-foreground mb-1">Assessment</p>
-              <p className={`text-xl font-semibold ${getRiskColor()}`}>
+              <p className="text-sm text-muted-foreground mb-1">Classification</p>
+              <p className={`text-xl font-semibold ${getRiskColor()}`}>{analysisResult.classification}</p>
+              <p className={`text-lg ${getRiskColor()}`}>
                 {analysisResult.riskLevel === 'High' && 'High Probability of Malignancy'}
                 {analysisResult.riskLevel === 'Medium' && 'Moderate Risk - Follow-up Required'}
                 {analysisResult.riskLevel === 'Low' && 'Low Probability - Routine Screening'}
               </p>
             </div>
           </div>
-          <p className="mt-4 text-sm text-muted-foreground">
-            The AI model has analyzed the chest X-ray and identified regions of interest. 
-            The heatmap overlay indicates areas with higher activation corresponding to potential abnormalities.
-          </p>
         </motion.div>
 
+        {/* Lung Age Card */}
+        {analysisResult.lungAge && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="mb-6">
+            <LungAgeCard lungAge={analysisResult.lungAge} />
+          </motion.div>
+        )}
+
+        {/* Symmetry Analysis */}
+        {analysisResult.symmetryAnalysis && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="mb-6">
+            <SymmetryAnalysis symmetryData={analysisResult.symmetryAnalysis} heatmapImage={heatmapImage} />
+          </motion.div>
+        )}
+
+        {/* Multi-Disease Results */}
+        {analysisResult.multiDiseaseResults && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }} className="mb-6">
+            <MultiDiseaseResults results={analysisResult.multiDiseaseResults} />
+          </motion.div>
+        )}
+
         {/* Detected Findings */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6"
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6">
           <div className="flex items-center gap-3 mb-4">
             <AlertCircle className="w-5 h-5 text-warning" />
             <h2 className="text-xl font-semibold">Detected Findings</h2>
-            <span className="px-3 py-1 bg-alert-yellow-light text-warning rounded-full text-sm font-medium">
-              Suspicious Nodule Detected
-            </span>
           </div>
-
           <ul className="space-y-3">
             <li className="flex items-start gap-3">
               <div className="w-2 h-2 bg-warning rounded-full mt-2 flex-shrink-0" />
@@ -225,134 +231,66 @@ const Results: React.FC = () => {
                 <span>{finding}</span>
               </li>
             ))}
-            {analysisResult.additionalObservations.map((obs, index) => (
-              <li key={`obs-${index}`} className="flex items-start gap-3">
-                <div className="w-2 h-2 bg-success rounded-full mt-2 flex-shrink-0" />
-                <span>{obs}</span>
-              </li>
-            ))}
           </ul>
         </motion.div>
 
         {/* Recommendations */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6"
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }} className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6">
           <h2 className="text-xl font-semibold mb-4">Clinical Recommendations</h2>
           <ul className="space-y-3">
             {analysisResult.recommendations.map((rec, index) => (
               <li key={index} className="flex items-start gap-3 p-3 bg-muted rounded-lg">
-                <div className="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-medium text-primary">
-                  {index + 1}
-                </div>
+                <div className="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-medium text-primary">{index + 1}</div>
                 <span>{rec}</span>
               </li>
             ))}
           </ul>
         </motion.div>
 
-        {/* Attention Level Indicator */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-          className="bg-card rounded-2xl p-6 shadow-sm border border-border mb-6"
-        >
-          <h2 className="text-lg font-semibold mb-4">Attention Level</h2>
-          <div className="relative h-6 rounded-full overflow-hidden bg-gradient-to-r from-success via-warning to-danger-red">
-            <motion.div
-              initial={{ left: '0%' }}
-              animate={{ left: getAttentionPosition() }}
-              transition={{ delay: 0.8, duration: 0.5 }}
-              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2"
-              style={{ left: getAttentionPosition() }}
-            >
-              <div className="w-4 h-8 bg-foreground rounded-sm shadow-lg" />
-            </motion.div>
-          </div>
-          <div className="flex justify-between mt-2 text-sm text-muted-foreground">
-            <span>Low Risk</span>
-            <span>Moderate</span>
-            <span>High Risk</span>
-          </div>
+        {/* Risk Simulator */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="mb-6">
+          <RiskSimulator currentRisk={analysisResult.riskScore} />
+        </motion.div>
+
+        {/* Radiologist Report */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }} className="mb-6">
+          <RadiologistReport analysisResult={analysisResult} />
         </motion.div>
 
         {/* Disclaimer & Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-          className="bg-danger-pink rounded-2xl p-6 border border-danger-red/20 mb-6"
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }} className="bg-danger-pink rounded-2xl p-6 border border-danger-red/20 mb-6">
           <div className="flex items-start gap-3 mb-4">
             <AlertTriangle className="w-5 h-5 text-danger-red flex-shrink-0 mt-0.5" />
             <p className="text-sm">
               <strong>Important:</strong> This AI-generated analysis is for investigational purposes only. 
-              All findings must be verified by a qualified radiologist or pulmonologist before any clinical 
-              decisions are made. This report does not constitute a medical diagnosis.
+              All findings must be verified by a qualified radiologist or pulmonologist.
             </p>
           </div>
-
           <label className="flex items-start gap-3 cursor-pointer group">
             <div className="relative mt-0.5">
-              <input
-                type="checkbox"
-                checked={isAcknowledged}
-                onChange={(e) => setIsAcknowledged(e.target.checked)}
-                className="sr-only"
-              />
-              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
-                isAcknowledged ? 'bg-primary border-primary' : 'border-danger-red/50 group-hover:border-primary'
-              }`}>
+              <input type="checkbox" checked={isAcknowledged} onChange={(e) => setIsAcknowledged(e.target.checked)} className="sr-only" />
+              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${isAcknowledged ? 'bg-primary border-primary' : 'border-danger-red/50 group-hover:border-primary'}`}>
                 {isAcknowledged && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
               </div>
             </div>
-            <span className="text-sm">
-              I acknowledge that I have read and understood the above disclaimer, and I will verify 
-              these findings through appropriate clinical protocols.
-            </span>
+            <span className="text-sm">I acknowledge that I have read and understood the disclaimer.</span>
           </label>
         </motion.div>
 
         {/* Action Buttons */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7 }}
-          className="flex flex-col sm:flex-row gap-4"
-        >
-          <motion.button
-            onClick={handleNewAnalysis}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex-1 btn-secondary py-4 rounded-xl font-semibold flex items-center justify-center gap-2"
-          >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }} className="flex flex-col sm:flex-row gap-4">
+          <motion.button onClick={handleNewAnalysis} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="flex-1 btn-secondary py-4 rounded-xl font-semibold flex items-center justify-center gap-2">
             <RefreshCw className="w-5 h-5" />
             New Analysis
           </motion.button>
-          <motion.button
-            onClick={handleDownloadReport}
-            disabled={!isAcknowledged || isDownloading}
-            whileHover={isAcknowledged ? { scale: 1.02 } : {}}
-            whileTap={isAcknowledged ? { scale: 0.98 } : {}}
-            className={`flex-1 py-4 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all ${
-              isAcknowledged 
-                ? 'btn-primary cursor-pointer' 
-                : 'bg-muted text-muted-foreground cursor-not-allowed'
-            }`}
-          >
+          <motion.button onClick={handleDownloadReport} disabled={!isAcknowledged || isDownloading} whileHover={isAcknowledged ? { scale: 1.02 } : {}} whileTap={isAcknowledged ? { scale: 0.98 } : {}} className={`flex-1 py-4 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all ${isAcknowledged ? 'btn-primary cursor-pointer' : 'bg-muted text-muted-foreground cursor-not-allowed'}`}>
             <Download className="w-5 h-5" />
             {isDownloading ? 'Generating PDF...' : 'Download Report'}
           </motion.button>
         </motion.div>
 
-        {/* Footer Disclaimer */}
         <p className="text-center text-xs text-muted-foreground mt-8">
-          LungScan AI © {new Date().getFullYear()} | For investigational use only | 
-          Model: DenseNet121 trained on NIH ChestX-ray14
+          LungScan AI © {new Date().getFullYear()} | For investigational use only
         </p>
       </div>
     </div>
